@@ -153,6 +153,11 @@
 (require 'diff-mode)
 (require 'windmove)
 
+(defvar ffip-use-rust-fd nil "Use use fd instead of find.")
+
+(defvar ffip-rust-fd-respect-ignore-files t
+  "Don 't show search results from '.*ignore' files")
+
 (defvar ffip-window-ratio-alist
   '((1 . 1.61803398875)
     (2 . 2)
@@ -475,9 +480,10 @@ If CHECK-ONLY is true, only do the check."
        (setq rlt exe))
      rlt))
 
-(defun ffip--executable-find (exe)
+(defun ffip--executable-find ()
   "Find EXE on all environments."
-  (let* (rlt)
+  (let* ((exe (if ffip-use-rust-fd "fd" "find"))
+         rlt)
     (cond
      ((file-remote-p default-directory)
       ;; In tramp mode and local windows, remote nix-like,
@@ -503,7 +509,7 @@ If CHECK-ONLY is true, only do the check."
 
 (defun ffip--prune-patterns ()
   "Turn `ffip-prune-patterns' into a string that `find' can use."
-  (mapconcat (lambda (pat) (format "-iwholename \"%s\"" pat))
+  (mapconcat (lambda (p) (format "-iwholename \"%s\"" p))
              ffip-prune-patterns " -or "))
 
 ;;;###autoload
@@ -545,6 +551,22 @@ This function returns the selected candidate or nil."
     (ivy-read prompt collection
               :action action))))
 
+(defun ffip-produce-shell-command ()
+  (let* (cmd
+         (fmt (if ffip-use-rust-fd ""
+                "%s . \\( %s \\) -prune -o -type %s %s %s %s -print")))
+    (setq cmd (format fmt
+                      (ffip--executable-find)
+                      (ffip--prune-patterns)
+                      (if is-finding-directory "d" "f")
+                      (ffip--join-patterns ffip-patterns)
+                      ;; When finding directory, the keyword is like:
+                      ;; "proj/hello/world"
+                      (if is-finding-directory (format "-iwholename \"*%s\"" keyword)
+                        (ffip--create-filename-pattern-for-gnufind keyword))
+                      ffip-find-options))
+    cmd))
+
 ;;;###autoload
 (defun ffip-project-search (keyword is-finding-directory &optional directory-to-search)
   "Return an alist of all filenames in the project and their path.
@@ -560,16 +582,7 @@ DIRECTORY-TO-SEARCH specify the root directory to search."
          (root (or directory-to-search
                    (ffip-get-project-root-directory)))
          (default-directory (file-name-as-directory root))
-         (cmd (format "%s . \\( %s \\) -prune -o -type %s %s %s %s -print"
-                      (ffip--executable-find "find")
-                      (ffip--prune-patterns)
-                      (if is-finding-directory "d" "f")
-                      (ffip--join-patterns ffip-patterns)
-                      ;; When finding directory, the keyword is like:
-                      ;; "proj/hello/world"
-                      (if is-finding-directory (format "-iwholename \"*%s\"" keyword)
-                        (ffip--create-filename-pattern-for-gnufind keyword))
-                      ffip-find-options)))
+         (cmd (ffip-produce-shell-command)))
 
     (if ffip-debug (message "run cmd at %s: %s" default-directory cmd))
     (setq rlt
